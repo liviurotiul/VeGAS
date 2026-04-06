@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Snippy By Reference</title>
+  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+  <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+  <style>
+    .container { max-width: 94% !important; }
+    .section { margin-top: 24px; margin-bottom: 24px; }
+    table { width: 100%; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1 class="mt-4">Reference group: {{ reference_name }}</h1>
+    <p>Samples in this group: {{ sample_names|join(', ') }}</p>
+    <p><a href="{{ tsv_name }}">Download TSV for this reference</a></p>
+
+    <div class="section">
+      {{ plot_div|safe }}
+    </div>
+
+    <div class="section">
+      <h3>Mutation table</h3>
+      <table class="table table-striped table-sm">
+        <thead>
+          <tr>
+            <th>Sample</th>
+            <th>Chrom</th>
+            <th>Pos</th>
+            <th>Type</th>
+            <th>Ref</th>
+            <th>Alt</th>
+            <th>Evidence</th>
+            <th>Gene</th>
+            <th>Product</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in mutation_rows %}
+          <tr>
+            <td>{{ row.sample }}</td>
+            <td>{{ row.CHROM }}</td>
+            <td>{{ row.POS }}</td>
+            <td>{{ row.TYPE }}</td>
+            <td>{{ row.REF }}</td>
+            <td>{{ row.ALT }}</td>
+            <td>{{ row.EVIDENCE }}</td>
+            <td>{{ row.GENE }}</td>
+            <td>{{ row.PRODUCT }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</body>
+</html>

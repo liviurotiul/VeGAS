@@ -46,6 +46,29 @@
       </table>
     </div>
 
+    <div class="section">
+      <h3>Grouped By Reference</h3>
+      <p>Reports grouped by selected reference are available in the <a href="{{ reference_report_dir }}/index.html">per-reference report index</a>.</p>
+      <table class="table table-striped table-sm">
+        <thead>
+          <tr>
+            <th>Reference</th>
+            <th>Samples</th>
+            <th>Mutations</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in reference_rows %}
+          <tr>
+            <td><a href="{{ reference_report_dir }}/{{ row.html_name }}">{{ row.reference_name }}</a></td>
+            <td>{{ row.sample_count }}</td>
+            <td>{{ row.mutation_count }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
   </div>
 </body>
 </html>

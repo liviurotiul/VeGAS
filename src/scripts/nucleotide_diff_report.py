@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 import argparse
 import os
+from collections import Counter
 
 import pandas as pd
 import plotly.graph_objects as go
+import pysam
 from jinja2 import Environment, FileSystemLoader
 from plotly.offline import plot
 
@@ -19,6 +21,8 @@ BASE_TO_VALUE = {
 
 
 VALUE_TO_BASE = {v: k for k, v in BASE_TO_VALUE.items()}
+
+DNA_BASES = ("A", "C", "G", "T")
 
 
 def normalize_to_ref_length(ref_seq, seq):
@@ -193,6 +197,170 @@ def write_tsv(path, rows):
             out.write(f"{pos}\t{ref_b}\t{classic_b}\t{snippy_b}\n")
 
 
+def collect_pileup_counts(bam_path):
+    pileup_map = {}
+
+    if not os.path.exists(bam_path):
+        return pileup_map
+
+    with pysam.AlignmentFile(bam_path, "rb") as bam:
+        if not bam.references:
+            return pileup_map
+
+        ref_name = bam.references[0]
+
+        for pileup_column in bam.pileup(ref_name, truncate=True, stepper="all", min_base_quality=0):
+            pos0 = pileup_column.reference_pos
+
+            observed = []
+            for pileup_read in pileup_column.pileups:
+                if pileup_read.is_refskip:
+                    continue
+                if pileup_read.is_del:
+                    observed.append("-")
+                    continue
+
+                query_pos = pileup_read.query_position
+                query_seq = pileup_read.alignment.query_sequence
+                if query_pos is None or not query_seq:
+                    continue
+
+                base = query_seq[query_pos].upper()
+                observed.append(base if base in {"A", "C", "G", "T", "N"} else "N")
+
+            pileup_map[pos0] = observed
+
+    return pileup_map
+
+
+def build_pileup_rows(bam_path, ref_seq, classic_seq, snippy_seq, informative_only=True):
+    rows = []
+    pileup_map = collect_pileup_counts(bam_path)
+
+    for pos0 in range(len(ref_seq)):
+        if pos0 >= len(classic_seq) or pos0 >= len(snippy_seq):
+            continue
+
+        ref_base = ref_seq[pos0]
+        classic_base = classic_seq[pos0]
+        snippy_base = snippy_seq[pos0]
+        observed = pileup_map.get(pos0, [])
+
+        if not observed and informative_only:
+            continue
+
+        counts = Counter(observed)
+        dna_depth = sum(counts[base] for base in DNA_BASES)
+        mixed_signal = sum(1 for base in DNA_BASES if counts[base] > 0) > 1
+        differs_from_ref = classic_base != ref_base or snippy_base != ref_base
+
+        if informative_only and not (mixed_signal or differs_from_ref):
+            continue
+
+        pct = {
+            base: round((counts[base] / dna_depth) * 100, 2) if dna_depth else 0.0
+            for base in DNA_BASES
+        }
+
+        top_count = max((counts[base] for base in DNA_BASES), default=0)
+        top_bases = [base for base in DNA_BASES if counts[base] == top_count and top_count > 0]
+        if classic_base in top_bases:
+            alignment_result = classic_base
+        elif top_bases:
+            alignment_result = "/".join(top_bases)
+        else:
+            alignment_result = classic_base
+
+        rows.append(
+            {
+                "position": pos0 + 1,
+                "ref": ref_base,
+                "alignment_result": alignment_result,
+                "classic": classic_base,
+                "snippy": snippy_base,
+                "pileup": "".join(observed),
+                "depth": len(observed),
+                "dna_depth": dna_depth,
+                "a_pct": pct["A"],
+                "c_pct": pct["C"],
+                "g_pct": pct["G"],
+                "t_pct": pct["T"],
+                "n_count": counts["N"],
+                "del_count": counts["-"],
+                "a_count": counts["A"],
+                "c_count": counts["C"],
+                "g_count": counts["G"],
+                "t_count": counts["T"],
+            }
+        )
+
+    return rows
+
+
+def write_pileup_tsv(path, rows):
+    with open(path, "wt") as out:
+        out.write(
+            "position\tref\talignment_result\tclassic\tsnippy\tpileup\tdepth\tdna_depth\t"
+            "A_count\tC_count\tG_count\tT_count\tN_count\tDEL_count\t"
+            "A_pct\tC_pct\tG_pct\tT_pct\n"
+        )
+        for row in rows:
+            out.write(
+                f"{row['position']}\t{row['ref']}\t{row['alignment_result']}\t{row['classic']}\t{row['snippy']}\t"
+                f"{row['pileup']}\t{row['depth']}\t{row['dna_depth']}\t"
+                f"{row['a_count']}\t{row['c_count']}\t{row['g_count']}\t{row['t_count']}\t"
+                f"{row['n_count']}\t{row['del_count']}\t"
+                f"{row['a_pct']}\t{row['c_pct']}\t{row['g_pct']}\t{row['t_pct']}\n"
+            )
+
+
+def write_full_position_documents(folder_path, sample_name, rows):
+    os.makedirs(folder_path, exist_ok=True)
+
+    tsv_path = os.path.join(folder_path, f"{sample_name}.full_positions.tsv")
+    txt_path = os.path.join(folder_path, f"{sample_name}.full_positions.txt")
+
+    write_pileup_tsv(tsv_path, rows)
+
+    with open(txt_path, "wt") as out:
+        out.write(f"Sample: {sample_name}\n")
+        out.write("Raport complet pe fiecare pozitie genomica\n\n")
+        for row in rows:
+            pileup_text = row["pileup"] if row["pileup"] else "NO_COVERAGE"
+            out.write(
+                f"Pozitia {row['position']}: ref {row['ref']}, "
+                f"bowtie {row['alignment_result']}, "
+                f"consens {row['classic']}, "
+                f"snippy {row['snippy']}, "
+                f"aliniament {pileup_text}, "
+                f"depth {row['depth']}, "
+                f"A {row['a_pct']}%, T {row['t_pct']}%, C {row['c_pct']}%, G {row['g_pct']}%\n"
+            )
+
+    return tsv_path, txt_path
+
+
+def render_per_sample_diff_reports(folder_path, install_path, sample_blocks):
+    os.makedirs(folder_path, exist_ok=True)
+
+    env = Environment(
+        loader=FileSystemLoader(os.path.join(install_path, "html_templates")),
+        autoescape=False,
+    )
+    template = env.get_template("nucleotide_diff_sample.html")
+
+    generated = {}
+    for block in sample_blocks:
+        file_name = f"{block['sample']}.html"
+        out_path = os.path.join(folder_path, file_name)
+        html = template.render(block=block)
+        with open(out_path, "wt") as out:
+            out.write(html)
+        generated[block["sample"]] = out_path
+
+    return generated
+
+
 def write_excel_three_rows(path, sample_sequences):
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
         for sample_name, ref_seq, classic_seq, snippy_seq in sample_sequences:
@@ -259,13 +427,18 @@ def main():
 
     sample_blocks = []
     sample_sequences = []
+    full_per_sample_dir = os.path.join(out_folder, "nucleotide_full_per_sample")
+    diff_html_per_sample_dir = os.path.join(out_folder, "nucleotide_diff_per_sample")
+    os.makedirs(full_per_sample_dir, exist_ok=True)
+    os.makedirs(diff_html_per_sample_dir, exist_ok=True)
 
     for sample in load_sample_list(out_folder):
         best_ref_file = os.path.join(out_folder, "assembly", f"{sample}.best_ref.txt")
         classic_fasta = os.path.join(out_folder, "assembly", f"{sample}.fasta")
         snippy_fasta = os.path.join(out_folder, "snippy", sample, "snps.consensus.fa")
+        classic_bam = os.path.join(out_folder, "assembly", f"{sample}.bam")
 
-        if not (os.path.exists(best_ref_file) and os.path.exists(classic_fasta) and os.path.exists(snippy_fasta)):
+        if not (os.path.exists(best_ref_file) and os.path.exists(classic_fasta) and os.path.exists(snippy_fasta) and os.path.exists(classic_bam)):
             continue
 
         with open(best_ref_file, "rt") as bf:
@@ -284,12 +457,17 @@ def main():
         snippy_seq = normalize_to_ref_length(ref_seq, snippy_seq)
 
         rows_any, rows_classic_ai, summary = diff_rows(ref_seq, classic_seq, snippy_seq)
+        pileup_rows = build_pileup_rows(classic_bam, ref_seq, classic_seq, snippy_seq, informative_only=True)
+        all_position_rows = build_pileup_rows(classic_bam, ref_seq, classic_seq, snippy_seq, informative_only=False)
         sample_sequences.append((sample, ref_seq, classic_seq, snippy_seq))
 
         tsv_any_path = os.path.join(diff_dir, f"{sample}.all_diffs.tsv")
         tsv_classic_ai_path = os.path.join(diff_dir, f"{sample}.classic_vs_snippy.tsv")
+        pileup_tsv_path = os.path.join(diff_dir, f"{sample}.pileup_details.tsv")
+        full_tsv_path, full_txt_path = write_full_position_documents(full_per_sample_dir, sample, all_position_rows)
         write_tsv(tsv_any_path, rows_any)
         write_tsv(tsv_classic_ai_path, rows_classic_ai)
+        write_pileup_tsv(pileup_tsv_path, pileup_rows)
 
         plot_div = build_position_plot(sample, rows_any)
         base_plot_div = build_basegrid_plot(sample, ref_seq, classic_seq, snippy_seq)
@@ -299,8 +477,22 @@ def main():
                 "summary": summary,
                 "diff_count": len(rows_any),
                 "classic_ai_count": len(rows_classic_ai),
+                "difference_rows": [
+                    {
+                        "position": pos,
+                        "ref": ref_b,
+                        "classic": classic_b,
+                        "snippy": snippy_b,
+                    }
+                    for pos, ref_b, classic_b, snippy_b in rows_any
+                ],
                 "plot_div": plot_div,
                 "base_plot_div": base_plot_div,
+                "pileup_rows": pileup_rows,
+                "pileup_count": len(pileup_rows),
+                "pileup_tsv_rel": os.path.relpath(pileup_tsv_path, out_folder),
+                "full_positions_tsv_rel": os.path.relpath(full_tsv_path, out_folder),
+                "full_positions_txt_rel": os.path.relpath(full_txt_path, out_folder),
                 "tsv_any_rel": os.path.relpath(tsv_any_path, out_folder),
                 "tsv_classic_ai_rel": os.path.relpath(tsv_classic_ai_path, out_folder),
             }
@@ -313,6 +505,14 @@ def main():
     template = env.get_template("nucleotide_diff.html")
     html = template.render(sample_blocks=sample_blocks)
 
+    per_sample_reports = render_per_sample_diff_reports(diff_html_per_sample_dir, args.install_path, sample_blocks)
+    for block in sample_blocks:
+        sample_report = per_sample_reports.get(block["sample"])
+        if sample_report:
+            block["sample_html_rel"] = os.path.relpath(sample_report, out_folder)
+
+    html = template.render(sample_blocks=sample_blocks)
+
     out_html = os.path.join(out_folder, "nucleotide_diff_report.html")
     with open(out_html, "wt") as out:
         out.write(html)
@@ -322,6 +522,8 @@ def main():
 
     out_per_sample_dir = os.path.join(out_folder, "nucleotide_3rows_per_sample")
     write_excel_per_sample(out_per_sample_dir, sample_sequences)
+    print(f"Wrote full per-sample position documents to {full_per_sample_dir}")
+    print(f"Wrote per-sample nucleotide diff HTML reports to {diff_html_per_sample_dir}")
 
     print(f"Wrote nucleotide diff report to {out_html}")
     print(f"Wrote Excel 3-row matrix to {out_xlsx}")
