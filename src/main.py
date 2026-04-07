@@ -173,6 +173,7 @@ def main():
     ]
 
     command.append("--config")
+    unlock_command.append("--config")
     command.extend(config_params)
     unlock_command.extend(config_params)
 
@@ -191,6 +192,12 @@ def main():
         sys.exit(result.returncode)
     else:
         tqdm.write("Pipeline completed successfully.")
+        igv_report_path = os.path.abspath(os.path.join(output_dir, "igv_report.html"))
+        tqdm.write(f"\n========================================")
+        tqdm.write(f"Raportul IGV HTML este gata!")
+        tqdm.write(f"Îl poți accesa din browser la adresa:")
+        tqdm.write(f"file://{igv_report_path}")
+        tqdm.write(f"========================================\n")
 
 if __name__ == "__main__":
     main()

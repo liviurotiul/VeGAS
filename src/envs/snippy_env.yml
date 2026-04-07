@@ -1,13 +1,6 @@
-name: snippy-env
+name: snippy_env
 channels:
-  - conda-forge
   - bioconda
-  - defaults
+  - conda-forge
 dependencies:
-  # Note: Snippy 4.6.0 has compatibility issues on ARM64.
-  # Consider using Docker with --use-singularity or containerization instead.
-  - samtools
-  - bcftools
-  - seqtk
-  - parallel
-  - bedtools
+  - snippy

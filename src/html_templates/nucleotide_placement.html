@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nucleotide Placement Report</title>
+  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+  <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+  <style>
+    .container { max-width: 95% !important; }
+    .section { margin-top: 20px; margin-bottom: 30px; }
+    table { width: 100%; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1 class="mt-4">Nucleotide Placement (How pieces were placed)</h1>
+    <p>Bars are genomic bins; overlap shows how classic and Snippy-style alignments were placed along the reference.</p>
+
+    {% for p in panels %}
+    <div class="section">
+      <h4>{{ p.sample }}</h4>
+      {{ p.plot_div|safe }}
+      <table class="table table-sm table-striped">
+        <thead>
+          <tr>
+            <th>CIGAR op</th>
+            <th>Classic total length</th>
+            <th>Snippy-style total length</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for op in ['M','I','D','N','S','H','=','X'] %}
+          <tr>
+            <td>{{ op }}</td>
+            <td>{{ p.classic_cigar[op] }}</td>
+            <td>{{ p.snippy_cigar[op] }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endfor %}
+  </div>
+</body>
+</html>

@@ -6,6 +6,8 @@ channels:
   - conda-forge
 dependencies:
   - numpy
+  - pandas
+  - openpyxl
   - plotly
   - jinja2
   - pysam

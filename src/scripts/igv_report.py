@@ -21,7 +21,12 @@ def find_bams(root_dirs):
     for d in root_dirs:
         paths.extend(glob.glob(os.path.join(d, "*.bam")))
     # dedupe and sort
-    return sorted(set(paths))
+    filtered = []
+    for path in sorted(set(paths)):
+        if "biolm" in path.lower():
+            continue
+        filtered.append(path)
+    return filtered
 
 
 def rel_to_root(path, root):
@@ -54,6 +59,8 @@ def build_rows(bam_files, web_root):
     rows = []
     for bam in bam_files:
         base = os.path.splitext(os.path.basename(bam))[0]
+        if "biolm" in base.lower():
+            continue
         bai_candidates = [bam + '.bai', os.path.splitext(bam)[0] + '.bai']
         bai = next((b for b in bai_candidates if os.path.exists(b)), None)
 

@@ -21,13 +21,6 @@ host_genomes_folder = config.get("host_genome", None)
 reference_genomes_folder = config.get("reference_genome", None)
 ccores = config.get("ccores", 1)
 
-# Print configuration variables
-# print(f"Install Path: {install_path}")
-# print(f"Work Directory: {work_directory}")
-# print(f"Host Genomes Folder: {host_genomes_folder}")
-# print(f"Reference Genomes Folder: {reference_genomes_folder}")
-# print(f"Number of Cores: {ccores}")
-
 # Ensure the raw_data directory exists
 try:
     os.makedirs("raw_data", exist_ok=True)
@@ -39,7 +32,6 @@ install_path = f"{install_path}"
 
 # Allow raw data directory to be configured (default: raw_data)
 raw_data_dir = config.get("raw_data", "raw_data")
-
 # ================= Utility Functions =================
 
 def list_fastq_files(path):
@@ -68,7 +60,6 @@ def build_fastq_pairs(fastq_files):
 # ================= Data Preparation =================
 
 fastq_files = list_fastq_files("raw_data")
-file_names = [os.path.basename(f).replace(".fastq.gz", "") for f in fastq_files]
 sample_pairs = build_fastq_pairs(fastq_files)
 sample_names = list(sample_pairs.keys())
 
@@ -78,6 +69,10 @@ QC_report_script = os.path.join(install_path, "scripts", "QC_report.py")
 assembly_report_script = os.path.join(install_path, "scripts", "assembly_report.py")
 igv_report_script = os.path.join(install_path, "scripts", "igv_report.py")
 phylo_script = os.path.join(install_path, "scripts", "phylo.py")
+phylo_html_script = os.path.join(install_path, "scripts", "generate_phylo_html.py")
+snippy_report_script = os.path.join(install_path, "scripts", "snippy_report.py")
+nucleotide_diff_report_script = os.path.join(install_path, "scripts", "nucleotide_diff_report.py")
+nucleotide_placement_report_script = os.path.join(install_path, "scripts", "nucleotide_placement_report.py")
 
 # Determine the list of host and reference genome names
 host_genomes = glob(os.path.join(str(host_genomes_folder), "*.fasta"))
@@ -139,9 +134,20 @@ rule all:
         # Report
         QC_report="QC.html",
         assembly_report="assembly_report.html",
+        nucleotide_diff_report="nucleotide_diff_report.html",
+        nucleotide_placement_report="nucleotide_placement_report.html",
         igv_report="igv_report.html",
         phylogeny="phylogeny/tree.nwk",
-        snippy_core="snippy/core.aln" if (ref_genome_names and sample_names) else []
+        phylogeny_html=["phylogeny_with_refs.html", "phylogeny_no_refs.html"],
+
+        # Snippy outputs
+        snippy_vcf=expand("snippy/{sample}/snps.vcf", sample=sample_names),
+        snippy_consensus=expand("snippy/{sample}/snps.consensus.fa", sample=sample_names),
+        snippy_core_aln="snippy/core.aln",
+        snippy_core_vcf="snippy/core.vcf",
+        snippy_report="snippy_report.html",
+
+        # DeepVariant outputs
 
 rule fastp:
     input:
@@ -301,7 +307,6 @@ rule QC_report:
         "envs/report_env.yml"
     shell:
         """
-        mkdir -p report &&
         echo Generating QC report &&
         python {QC_report_script} --folder {work_directory} --install_path {install_path}
         """
@@ -317,7 +322,6 @@ rule assembly_report:
         "envs/report_env.yml"
     shell:
         """
-        mkdir -p report &&
         echo Generating assembly report &&
         python {assembly_report_script} --folder {work_directory} --install_path {install_path}
         """
@@ -331,8 +335,7 @@ rule igv_report:
         "envs/report_env.yml"
     shell:
         """
-        mkdir -p report &&
-        python {igv_report_script} --root {work_directory} --bamdirs data/output/assembly data/output --template {install_path}/html_templates/igv.html --out {output}
+        python {igv_report_script} --root . --bamdirs assembly . --template {install_path}/html_templates/igv.html --out {output}
         """
 
 rule phylogeny:
@@ -347,66 +350,109 @@ rule phylogeny:
         python {phylo_script} --assembly-dir assembly --out-dir phylogeny
         """
 
-rule snippy_input_tab:
-    output:
-        "snippy/input.tab"
-    run:
-        import glob as glob_module
-        os.makedirs(os.path.dirname(output[0]), exist_ok=True)
-        # Re-detect samples from raw_data_dir using config (evaluated at execution time)
-        raw_dir = config.get("raw_data", "raw_data")
-        # Keep as relative path for Docker compatibility
-        raw_dir_abs = os.path.abspath(raw_dir)
-        fastq_files = [f for f in glob_module.glob(os.path.join(raw_dir_abs, "*.fastq.gz"))]
-        
-        # Build sample pairs
-        pairs = {}
-        for file in fastq_files:
-            bn = os.path.basename(file)
-            # Extract sample name
-            if "_R1" in bn:
-                sample = bn.split("_R1", 1)[0]
-            elif "_R2" in bn:
-                sample = bn.split("_R2", 1)[0]
-            else:
-                continue
-            
-            if sample not in pairs:
-                pairs[sample] = {}
-            
-            if "_R1" in bn or "R1" in bn:
-                pairs[sample]["R1"] = file
-            elif "_R2" in bn or "R2" in bn:
-                pairs[sample]["R2"] = file
-        
-        # Filter complete pairs and write with absolute paths
-        with open(output[0], 'w') as fh:
-            for s, p in sorted(pairs.items()):
-                if "R1" in p and "R2" in p:
-                    # Use absolute paths for snippy-multi
-                    fh.write(f"{s}\t{os.path.abspath(p['R1'])}\t{os.path.abspath(p['R2'])}\n")
-
-rule snippy_multi:
+rule phylogeny_html:
     input:
-        tab="snippy/input.tab",
-        ref=lambda wildcards: os.path.join(reference_genomes_folder, f"{default_ref}.fasta") if default_ref else ""
+        tree="phylogeny/tree.nwk"
     output:
-        core="snippy/core.aln",
-        done="snippy/snippy_done.txt"
-    params:
-        threads=lambda wildcards, threads: min(threads, ccores)
-    threads:
-        min(ccores, 4)
+        with_refs="phylogeny_with_refs.html",
+        no_refs="phylogeny_no_refs.html"
+    conda:
+        "envs/report_env.yml"
     shell:
         """
-        mkdir -p snippy
-        cd snippy
-        
-        # Just generate a dummy core.aln - Snippy on ARM64 Mac has significant limitations
-        # The pipeline runs successfully but individual snippet calls don't work reliably
-        # User can manually run: snippy-multi input.tab --ref reference.fasta --outdir . --cpus 4
-        
-        touch core.aln
-        cd ..
-        touch snippy/snippy_done.txt
+        python {phylo_html_script} --root . --tree phylogeny/tree.nwk --template {install_path}/html_templates/phylogeny.html --out {output.with_refs}
         """
+
+rule snippy_per_sample:
+    input:
+        R1="cleaned/{sample}_R1.fastq.gz",
+        R2="cleaned/{sample}_R2.fastq.gz",
+        best_ref="assembly/{sample}.best_ref.txt"
+    output:
+        vcf="snippy/{sample}/snps.vcf",
+        aligned="snippy/{sample}/snps.aligned.fa",
+        bam="snippy/{sample}/snps.bam",
+        consensus="snippy/{sample}/snps.consensus.fa"
+    conda:
+        "envs/snippy_env.yml"
+    threads:
+        ccores
+    shell:
+        """
+        mkdir -p snippy/{wildcards.sample}
+        BEST_REF=$(cat {input.best_ref}).fasta
+        snippy --force --cpus {ccores} --outdir snippy/{wildcards.sample} --ref $BEST_REF --R1 {input.R1} --R2 {input.R2}
+        """
+
+rule snippy_core:
+    input:
+        aligned=expand("snippy/{sample}/snps.aligned.fa", sample=sample_names),
+        best_ref=expand("assembly/{sample}.best_ref.txt", sample=sample_names)
+    output:
+        core_aln="snippy/core.aln",
+        core_vcf="snippy/core.vcf"
+    params:
+        sample_dirs=expand("snippy/{sample}", sample=sample_names)
+    conda:
+        "envs/snippy_env.yml"
+    threads:
+        ccores
+    shell:
+        """
+        CORE_PREFIX=$(cat assembly/*.best_ref.txt | sort | uniq -c | sort -nr | awk 'NR==1{{print $2}}')
+        CORE_REF="$CORE_PREFIX.fasta"
+        SAMPLE_DIRS=""
+
+        for BEST_REF_FILE in assembly/*.best_ref.txt; do
+            SAMPLE_NAME=$(basename "$BEST_REF_FILE" .best_ref.txt)
+            SAMPLE_REF=$(cat "$BEST_REF_FILE")
+            if [ "$SAMPLE_REF" = "$CORE_PREFIX" ]; then
+                SAMPLE_DIRS="$SAMPLE_DIRS snippy/$SAMPLE_NAME"
+            fi
+        done
+
+        snippy-core --ref "$CORE_REF" --prefix snippy/core $SAMPLE_DIRS
+        """
+
+rule snippy_report:
+    input:
+        snippy_vcf=expand("snippy/{sample}/snps.vcf", sample=sample_names),
+        core_aln="snippy/core.aln",
+        core_vcf="snippy/core.vcf"
+    output:
+        report="snippy_report.html"
+    conda:
+        "envs/report_env.yml"
+    shell:
+        """
+        python {snippy_report_script} --folder {work_directory} --install_path {install_path}
+        """
+
+rule nucleotide_diff_report:
+    input:
+        classic_fasta=expand("assembly/{sample}.fasta", sample=sample_names),
+        best_ref=expand("assembly/{sample}.best_ref.txt", sample=sample_names),
+        ai_consensus=expand("snippy/{sample}/snps.consensus.fa", sample=sample_names)
+    output:
+        report="nucleotide_diff_report.html"
+    conda:
+        "envs/report_env.yml"
+    shell:
+        """
+        python {nucleotide_diff_report_script} --folder {work_directory} --install_path {install_path}
+        """
+
+rule nucleotide_placement_report:
+    input:
+        classic_bam=expand("assembly/{sample}.bam", sample=sample_names),
+        ai_bam=expand("snippy/{sample}/snps.bam", sample=sample_names)
+    output:
+        report="nucleotide_placement_report.html"
+    conda:
+        "envs/report_env.yml"
+    shell:
+        """
+        python {nucleotide_placement_report_script} --folder {work_directory} --install_path {install_path}
+        """
+
+

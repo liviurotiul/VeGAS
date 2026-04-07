@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Snippy Report</title>
+  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+  <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+  <style>
+    .container { max-width: 92% !important; }
+    .section { margin-top: 24px; margin-bottom: 24px; }
+    table { width: 100%; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1 class="mt-4">Snippy Report</h1>
+
+    <div class="section">
+      <h3>Variants per sample</h3>
+      {{ barplot_div|safe }}
+    </div>
+
+    <div class="section">
+      <h3>Pairwise SNP distances</h3>
+      {{ heatmap_div|safe }}
+    </div>
+
+    <div class="section">
+      <h3>Counts table</h3>
+      <table class="table table-striped table-sm">
+        <thead>
+          <tr>
+            <th>Sample</th>
+            <th>SNP count</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for sample, count in sample_counts %}
+          <tr>
+            <td>{{ sample }}</td>
+            <td>{{ count }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="section">
+      <h3>Grouped By Reference</h3>
+      <p>Reports grouped by selected reference are available in the <a href="{{ reference_report_dir }}/index.html">per-reference report index</a>.</p>
+      <table class="table table-striped table-sm">
+        <thead>
+          <tr>
+            <th>Reference</th>
+            <th>Samples</th>
+            <th>Mutations</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in reference_rows %}
+          <tr>
+            <td><a href="{{ reference_report_dir }}/{{ row.html_name }}">{{ row.reference_name }}</a></td>
+            <td>{{ row.sample_count }}</td>
+            <td>{{ row.mutation_count }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+</body>
+</html>
