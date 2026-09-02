@@ -23,15 +23,34 @@ def parse_arguments():
     parser.add_argument("-cc", "--context_cores", dest="context_cores", help="The number of cores to use for context", default=1, type=int)
     return parser.parse_args()
 
+# ================= Logging & Colors =================
+RED    = "\033[91m"
+YELLOW = "\033[93m"
+GREEN  = "\033[92m"
+RESET  = "\033[0m"
+
+def log_info(msg):
+    tqdm.write(f"{GREEN}[INFO]{RESET} {msg}")
+
+def log_warn(msg):
+    tqdm.write(f"{YELLOW}[WARN]{RESET} {msg}")
+
+def log_error(msg):
+    tqdm.write(f"{RED}[ERROR]{RESET} {msg}")
+
+def log_fatal(msg):
+    tqdm.write(f"{RED}[FATAL]{RESET} {msg}")
+
 # ================= Utility Functions =================
 def list_fastq_files(path):
-    """Returns a list of all .fastq.gz files in the specified path relative to base_folder."""
+    """Returns a list of all .fastq.gz and .fastq files in the specified path."""
     full_path = os.path.join(path)
-    return [f for f in glob(os.path.join(full_path, "*.fastq.gz"))]
+    files = glob(os.path.join(full_path, "*.fastq.gz")) + glob(os.path.join(full_path, "*.fastq"))
+    return files
 
 def get_core_sample_name(filename):
     """Extracts the core sample name by removing _R1 or _R2 and other suffixes."""
-    return os.path.basename(filename).replace("_R1", "").replace("_R2", "").replace(".fastq.gz", "")
+    return os.path.basename(filename).replace("_R1", "").replace("_R2", "").replace(".fastq.gz", "").replace(".fastq", "")
 
 def build_fastq_pairs(fastq_files):
     """Pairs R1 and R2 files based on sample names."""
@@ -49,20 +68,30 @@ def build_fastq_pairs(fastq_files):
 
 def copy_files(base_folder, source_files, destination="raw_data"):
     """Copies files from source directory to destination within base_folder without renaming them."""
+    import gzip
     dest_path = os.path.join(base_folder, destination)
     os.makedirs(dest_path, exist_ok=True)
     for src in tqdm(source_files, desc="Copying files"):
         dest = os.path.join(dest_path, os.path.basename(src))
-        
+
+        # Dacă fișierul e .fastq (necomprimat), îl comprimăm la destinație ca .fastq.gz
+        if dest.endswith(".fastq") and not dest.endswith(".fastq.gz"):
+            dest = dest + ".gz"
+
         # Move _R1 and _R2 to the end of the filename
         if "R1" in dest:
             dest = dest.replace("_R1", "").replace(".fastq.gz", "_R1.fastq.gz")
         elif "R2" in dest:
             dest = dest.replace("_R2", "").replace(".fastq.gz", "_R2.fastq.gz")
-        
-        if not os.path.exists(dest) or os.path.getsize(src) != os.path.getsize(dest):
-            shutil.copy2(src, dest)
-            tqdm.write(f"[pegas] Copied '{src}' to '{dest}'.")
+
+        if not os.path.exists(dest):
+            if src.endswith(".fastq") and not src.endswith(".fastq.gz"):
+                tqdm.write(f"[pegas] Comprimând '{os.path.basename(src)}' → '{os.path.basename(dest)}'...")
+                with open(src, "rb") as f_in, gzip.open(dest, "wb") as f_out:
+                    shutil.copyfileobj(f_in, f_out)
+            else:
+                shutil.copy2(src, dest)
+            tqdm.write(f"[pegas] Copiat '{src}' → '{dest}'.")
 
 def remove_extra_files(base_folder, destination, valid_files):
     """Removes unwanted files from the destination directory and clears related data for affected samples."""
@@ -109,22 +138,22 @@ def main():
     
     # Check if the data directory exists
     if not os.path.exists(data_dir):
-        tqdm.write(f"[pegas]Data directory '{data_dir}' does not exist.")
+        log_fatal(f"Folderul de date '{data_dir}' nu există.")
         sys.exit(1)
     if os.listdir(data_dir) == []:
-        tqdm.write(f"[pegas]Data directory '{data_dir}' is empty.")
+        log_fatal(f"Folderul de date '{data_dir}' este gol.")
         sys.exit(1)
     if not os.path.exists(reference):
-        tqdm.write(f"[pegas]Reference directory '{reference}' does not exist.")
+        log_fatal(f"Folderul de referință '{reference}' nu există.")
         sys.exit(1)
     if os.listdir(reference) == []:
-        tqdm.write(f"[pegas]Reference directory '{reference}' is empty.")
+        log_fatal(f"Folderul de referință '{reference}' este gol.")
         sys.exit(1)
     if not os.path.exists(host):
-        tqdm.write(f"[pegas]Host directory '{host}' does not exist.")
+        log_fatal(f"Folderul host '{host}' nu există.")
         sys.exit(1)
     if os.listdir(host) == []:
-        tqdm.write(f"[pegas]Host directory '{host}' is empty.")
+        log_fatal(f"Folderul host '{host}' este gol.")
         sys.exit(1)
     
     # Build config params as a list (order preserved) to pass to snakemake
@@ -138,6 +167,33 @@ def main():
     
     # List all FASTQ files in the raw_data_path and raw_data directories
     raw_data_files = list_fastq_files(data_dir)
+
+    # Verificare: detectăm fișiere fără pereche R1/R2 înainte să începem
+    startup_warnings = []
+    all_pairs = {}
+    for f in raw_data_files:
+        sample = get_core_sample_name(f)
+        if sample not in all_pairs:
+            all_pairs[sample] = {}
+        if "_R1" in f or "R1" in f:
+            all_pairs[sample]["R1"] = os.path.basename(f)
+        elif "_R2" in f or "R2" in f:
+            all_pairs[sample]["R2"] = os.path.basename(f)
+
+    unpaired = {s: p for s, p in all_pairs.items() if not ("R1" in p and "R2" in p)}
+    for sample, found in unpaired.items():
+        missing = [x for x in ["R1", "R2"] if x not in found]
+        msg = f"Probă ignorată '{sample}': lipsește fișierul {missing} (găsit doar {list(found.keys())})"
+        log_warn(msg)
+        startup_warnings.append(msg)
+
+    valid_pairs = {s: p for s, p in all_pairs.items() if "R1" in p and "R2" in p}
+    if not valid_pairs:
+        log_fatal(f"Nu există nicio probă validă cu R1+R2 în '{data_dir}'.")
+        log_error("Asigură-te că fișierele au extensia .fastq.gz și conțin _R1_ sau _R2_ în nume.")
+        sys.exit(1)
+
+    log_info(f"{len(valid_pairs)} probă(e) validă(e) cu R1+R2: {list(valid_pairs.keys())}")
 
     # Check if the output directory exists
     if not os.path.exists(output_dir):
@@ -188,15 +244,25 @@ def main():
 
     result = subprocess.run(command)
     if result.returncode != 0:
-        tqdm.write("Error: Pipeline failed.")
+        log_error("Pipeline eșuat.")
+        if startup_warnings:
+            tqdm.write(f"\n{RED}========================================{RESET}")
+            tqdm.write(f"{RED}AVERTISMENTE DETECTATE LA PORNIRE:{RESET}")
+            for w in startup_warnings:
+                tqdm.write(f"{YELLOW}  ⚠ {w}{RESET}")
+            tqdm.write(f"{RED}========================================{RESET}\n")
         sys.exit(result.returncode)
     else:
-        tqdm.write("Pipeline completed successfully.")
+        log_info("Pipeline finalizat cu succes.")
         igv_report_path = os.path.abspath(os.path.join(output_dir, "igv_report.html"))
         tqdm.write(f"\n========================================")
         tqdm.write(f"Raportul IGV HTML este gata!")
         tqdm.write(f"Îl poți accesa din browser la adresa:")
         tqdm.write(f"file://{igv_report_path}")
+        if startup_warnings:
+            tqdm.write(f"\n{YELLOW}AVERTISMENTE (probe ignorate):{RESET}")
+            for w in startup_warnings:
+                tqdm.write(f"{YELLOW}  ⚠ {w}{RESET}")
         tqdm.write(f"========================================\n")
 
 if __name__ == "__main__":

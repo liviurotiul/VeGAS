@@ -73,6 +73,7 @@ phylo_html_script = os.path.join(install_path, "scripts", "generate_phylo_html.p
 snippy_report_script = os.path.join(install_path, "scripts", "snippy_report.py")
 nucleotide_diff_report_script = os.path.join(install_path, "scripts", "nucleotide_diff_report.py")
 nucleotide_placement_report_script = os.path.join(install_path, "scripts", "nucleotide_placement_report.py")
+aa_report_script = os.path.join(install_path, "scripts", "aa_report.py")
 
 # Determine the list of host and reference genome names
 host_genomes = glob(os.path.join(str(host_genomes_folder), "*.fasta"))
@@ -146,6 +147,7 @@ rule all:
         snippy_core_aln="snippy/core.aln",
         snippy_core_vcf="snippy/core.vcf",
         snippy_report="snippy_report.html",
+        aa_report="aa_report.html",
 
         # DeepVariant outputs
 
@@ -453,6 +455,19 @@ rule nucleotide_placement_report:
     shell:
         """
         python {nucleotide_placement_report_script} --folder {work_directory} --install_path {install_path}
+        """
+
+rule aa_report:
+    input:
+        consensus=expand("snippy/{sample}/snps.consensus.fa", sample=sample_names),
+        classic_fasta=expand("assembly/{sample}.fasta", sample=sample_names)
+    output:
+        report="aa_report.html"
+    conda:
+        "envs/report_env.yml"
+    shell:
+        """
+        python {aa_report_script} --folder {work_directory} --install_path {install_path} --reference_dir {reference_genomes_folder}
         """
 
 
