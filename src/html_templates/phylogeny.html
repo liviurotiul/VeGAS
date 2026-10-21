@@ -223,7 +223,7 @@
     const newick = el.textContent && el.textContent.trim();
     const container = document.getElementById('tree');
     if (!newick) {
-      container.innerHTML = '<em>No tree data found. Run the phylogeny step to generate phylogeny/tree.nwk</em>';
+      container.innerHTML = '<em>No tree data found. Run the phylogeny step to generate phylogeny/&lt;virus&gt;/tree.nwk</em>';
       return;
     }
     try {

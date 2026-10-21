@@ -1,28 +1,71 @@
 #!/usr/bin/env python3
-"""Generate a simple static HTML page for the phylogeny tree.nwk
+"""Generate HTML phylogeny pages for every virus/reference group.
 
-This script reads `phylogeny/tree.nwk` under the given root and writes
-`data/output/phylogeny.html` (or custom out path) by injecting the Newick
-string into the HTML template `src/html_templates/phylogeny.html`.
-
-Usage:
-  python scripts/generate_phylo_html.py --root data/output --out data/output/phylogeny.html
+For each virus two pages are written: one with the reference sequence included
+and one with only the samples.
 """
 import argparse
+import html
 import os
-import io
+
+# (subdirectory with tree.nwk, output page name, label)
+VARIANTS = [
+    ('with_reference', 'phylogeny_with_reference.html', 'probe + referință'),
+    ('samples_only', 'phylogeny_samples_only.html', 'doar probe'),
+]
+
+
+def read_manifest(manifest_path):
+    """Read the phylogeny manifest written by ``phylo.py``."""
+    groups = []
+    with open(manifest_path, 'rt') as fh:
+        next(fh, None)  # header
+        for line in fh:
+            parts = line.rstrip('\n').split('\t')
+            if len(parts) != 4:
+                continue
+            reference, directory, sample_count, has_reference = parts
+            groups.append((reference, directory, int(sample_count), has_reference == '1'))
+    return groups
+
+
+def inject_tree(template, newick):
+    marker = '<script id="newick-data" type="text/plain"></script>'
+    return template.replace(marker, f'<script id="newick-data" type="text/plain">{newick}</script>')
+
+
+def index_html(groups, link_prefix=''):
+    rows = []
+    for reference, directory, sample_count, has_reference in groups:
+        label = html.escape(reference)
+        plural = 'probă' if sample_count == 1 else 'probe'
+        links = []
+        for subdir, page, text in VARIANTS:
+            if subdir == 'with_reference' and not has_reference:
+                continue
+            href = html.escape(f'{link_prefix}{directory}/{page}')
+            links.append(f'<a href="{href}">{text}</a>')
+        rows.append(f'<li><strong>{label}</strong> ({sample_count} {plural}): ' + ' | '.join(links) + '</li>')
+    content = '\n'.join(rows) if rows else '<li>Nu există probe cu o referință virală selectată.</li>'
+    return f'''<!doctype html>
+<html lang="ro"><head><meta charset="utf-8"><title>Arbori filogenetici</title>
+<style>body{{font-family:system-ui,-apple-system,sans-serif;max-width:900px;margin:3rem auto;padding:0 1rem}} li{{margin:.7rem 0}}</style>
+</head><body><h1>Arbori filogenetici</h1>
+<p>Fiecare arbore conține exclusiv probele care au avut aceeași referință virală selectată la asamblare. </p>
+<ul>{content}</ul></body></html>'''
 
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('--root', default='data/output', help='Project output root')
-    p.add_argument('--tree', default='phylogeny/tree.nwk', help='Path to Newick tree inside root')
+    p.add_argument('--phylogeny-dir', default='phylogeny', help='Directory containing per-virus trees')
     p.add_argument('--template', default='src/html_templates/phylogeny.html', help='HTML template path')
-    p.add_argument('--out', default='data/output/phylogeny.html', help='Output HTML path (base for generated files)')
+    p.add_argument('--out', default='data/output/phylogeny.html', help='Output path for the phylogeny index page')
     args = p.parse_args()
 
-    tree_path = os.path.join(args.root, args.tree)
-    if not os.path.exists(tree_path):
-        print('Tree file not found:', tree_path)
+    phylogeny_dir = os.path.join(args.root, args.phylogeny_dir)
+    manifest_path = os.path.join(phylogeny_dir, 'trees.tsv')
+    if not os.path.exists(manifest_path):
+        print('Tree manifest not found:', manifest_path)
         return 1
 
     tmpl_path = args.template
@@ -30,163 +73,33 @@ def main():
         print('Template not found:', tmpl_path)
         return 2
 
-    with open(tree_path, 'rt') as fh:
-        newick = fh.read().strip()
-
-    # read template
     with open(tmpl_path, 'rt') as fh:
         tmpl = fh.read()
 
-    # gather reference names (first token of FASTA header) from data/reference
-    # prefer references located under the output root, but also check common repo locations
-    ref_dir = os.path.join(args.root, 'reference')
-    if not os.path.isdir(ref_dir):
-        # try sibling 'reference' next to output root (e.g. data/reference)
-        parent = os.path.dirname(args.root)
-        if parent:
-            alt = os.path.join(parent, 'reference')
-            if os.path.isdir(alt):
-                ref_dir = alt
-    if not os.path.isdir(ref_dir):
-        # final fallback: top-level data/reference
-        alt2 = os.path.join('data', 'reference')
-        if os.path.isdir(alt2):
-            ref_dir = alt2
-    ref_names = set()
-    if os.path.isdir(ref_dir):
-        for fn in os.listdir(ref_dir):
-            if not fn.lower().endswith('.fasta') and not fn.lower().endswith('.fa'):
+    groups = read_manifest(manifest_path)
+    for reference, directory, _, _ in groups:
+        for subdir, page, _ in VARIANTS:
+            tree_path = os.path.join(phylogeny_dir, directory, subdir, 'tree.nwk')
+            if not os.path.exists(tree_path):
+                print('Tree file not found for', reference, f'({subdir}):', tree_path)
                 continue
-            fpath = os.path.join(ref_dir, fn)
-            try:
-                with open(fpath, 'rt') as fh:
-                    for line in fh:
-                        if line.startswith('>'):
-                            # extract name up to whitespace
-                            header = line[1:].strip().split()[0]
-                            if header:
-                                ref_names.add(header)
-                            break
-            except Exception:
-                continue
+            with open(tree_path, 'rt') as fh:
+                newick = fh.read().strip()
+            output_path = os.path.join(phylogeny_dir, directory, page)
+            with open(output_path, 'wt') as fh:
+                fh.write(inject_tree(tmpl, newick))
+            print('Wrote', output_path)
 
-    # simple Newick parser/serializer to allow filtering leaves by name
-    class Node:
-        def __init__(self):
-            self.name = None
-            self.length = None
-            self.children = []
-
-    def parse_newick(s):
-        s = s.strip()
-        i = 0
-        L = len(s)
-        def eat_ws():
-            nonlocal i
-            while i < L and s[i].isspace(): i += 1
-
-        def parse_sub():
-            nonlocal i
-            eat_ws()
-            node = Node()
-            if i < L and s[i] == '(':
-                i += 1
-                while True:
-                    child = parse_sub()
-                    node.children.append(child)
-                    eat_ws()
-                    if i < L and s[i] == ',':
-                        i += 1
-                        continue
-                    if i < L and s[i] == ')':
-                        i += 1
-                        break
-                    break
-            eat_ws()
-            # parse name
-            name = ''
-            while i < L and s[i] not in ':,();\n\r\t':
-                name += s[i]; i += 1
-            if name:
-                node.name = name
-            eat_ws()
-            if i < L and s[i] == ':':
-                i += 1
-                num = ''
-                while i < L and s[i] in '0123456789.eE+-':
-                    num += s[i]; i += 1
-                try:
-                    node.length = float(num) if num else None
-                except Exception:
-                    node.length = None
-            return node
-
-        root = parse_sub()
-        return root
-
-    def serialize(node):
-        s = ''
-        if node.children:
-            s += '(' + ','.join(serialize(c) for c in node.children) + ')'
-        if node.name:
-            s += node.name
-        if node.length is not None:
-            s += ':' + ('%g' % node.length)
-        return s
-
-    def filter_node(node, refs):
-        # returns node or None if filtered
-        if not node.children:
-            if node.name and node.name in refs:
-                return None
-            return node
-        new_children = []
-        for c in node.children:
-            kept = filter_node(c, refs)
-            if kept is not None:
-                new_children.append(kept)
-        node.children = new_children
-        if not node.children:
-            return None
-        return node
-
-    # prepare two Newick strings: original (with refs) and filtered (no refs)
-    newick_clean = newick.rstrip(';')
-    newick_with = newick_clean + ';'
-    newick_no_refs = ''
-    if ref_names:
-        try:
-            parsed = parse_newick(newick_clean)
-            filtered = filter_node(parsed, ref_names)
-            if filtered is None:
-                newick_no_refs = ''
-            else:
-                newick_no_refs = serialize(filtered) + ';'
-        except Exception:
-            newick_no_refs = ''
-
-    # helper to write one output file given a newick string
-    def write_out(outpath, newick_str):
-        if not newick_str:
-            # write a page with a small message
-            injected = tmpl.replace('<script id="newick-data" type="text/plain"></script>',
-                                    '<script id="newick-data" type="text/plain"></script>')
-            # add a small note in the container via JS: if no data, the existing script shows message
-        else:
-            injected = tmpl.replace('<script id="newick-data" type="text/plain"></script>',
-                                    f'<script id="newick-data" type="text/plain">{newick_str}</script>')
-        os.makedirs(os.path.dirname(outpath), exist_ok=True)
-        with open(outpath, 'wt') as fh:
-            fh.write(injected)
-        print('Wrote', outpath)
-
-    base_out = args.out
-    base_dir = os.path.dirname(base_out) or args.root
-    # produce two files
-    out_with = os.path.join(base_dir, 'phylogeny_with_refs.html')
-    out_no = os.path.join(base_dir, 'phylogeny_no_refs.html')
-    write_out(out_with, newick_with)
-    write_out(out_no, newick_no_refs)
+    index_path = os.path.join(phylogeny_dir, 'index.html')
+    with open(index_path, 'wt') as fh:
+        fh.write(index_html(groups))
+    # The landing page lives outside phylogeny/, so its links need the folder prefix.
+    out_dir = os.path.dirname(os.path.abspath(args.out))
+    prefix = os.path.relpath(os.path.abspath(phylogeny_dir), out_dir).replace(os.sep, '/') + '/'
+    with open(args.out, 'wt') as fh:
+        fh.write(index_html(groups, prefix))
+    print('Wrote', index_path)
+    print('Wrote', args.out)
 
     return 0
 

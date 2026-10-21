@@ -138,8 +138,7 @@ rule all:
         nucleotide_diff_report="nucleotide_diff_report.html",
         nucleotide_placement_report="nucleotide_placement_report.html",
         igv_report="igv_report.html",
-        phylogeny="phylogeny/tree.nwk",
-        phylogeny_html=["phylogeny_with_refs.html", "phylogeny_no_refs.html"],
+        phylogeny_html=["phylogeny.html", "phylogeny/index.html"],
 
         # Snippy outputs
         snippy_vcf=expand("snippy/{sample}/snps.vcf", sample=sample_names),
@@ -342,27 +341,28 @@ rule igv_report:
 
 rule phylogeny:
     input:
-        fasta=expand("assembly/{sample}.fasta", sample=sample_names)
+        fasta=expand("assembly/{sample}.fasta", sample=sample_names),
+        best_ref=expand("assembly/{sample}.best_ref.txt", sample=sample_names)
     output:
-        "phylogeny/tree.nwk"
+        "phylogeny/trees.tsv"
     conda:
         "envs/phylo_env.yml"
     shell:
         """
-        python {phylo_script} --assembly-dir assembly --out-dir phylogeny
+        python {phylo_script} --assembly-dir assembly --best-ref-dir assembly --reference-dir ref_indexes --out-dir phylogeny
         """
 
 rule phylogeny_html:
     input:
-        tree="phylogeny/tree.nwk"
+        trees="phylogeny/trees.tsv"
     output:
-        with_refs="phylogeny_with_refs.html",
-        no_refs="phylogeny_no_refs.html"
+        landing="phylogeny.html",
+        index="phylogeny/index.html"
     conda:
         "envs/report_env.yml"
     shell:
         """
-        python {phylo_html_script} --root . --tree phylogeny/tree.nwk --template {install_path}/html_templates/phylogeny.html --out {output.with_refs}
+        python {phylo_html_script} --root . --phylogeny-dir phylogeny --template {install_path}/html_templates/phylogeny.html --out {output.landing}
         """
 
 rule snippy_per_sample:
